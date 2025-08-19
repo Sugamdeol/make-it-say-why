@@ -1,0 +1,7 @@
+name = "cognitive-orchestrator"
+main = "src/worker.js"
+compatibility_date = "2024-03-18"
+
+# This section is for secrets. We'll set the value in the terminal.
+[vars]
+POLLINATIONS_BASE_URL = "https://text.pollinations.ai/openai"
