@@ -1,90 +1,115 @@
 /**
- * Welcome to the Cognitive Orchestrator on Cloudflare Workers!
- * This worker implements a reasoning API on top of the Pollinations.AI backend.
+ * =================================================================
+ * Cognitive Orchestrator on Cloudflare Workers
+ * 
+ * This is the complete file with the CORS (Cross-Origin Resource Sharing)
+ * fix implemented. It handles preflight OPTIONS requests and adds the
+ * necessary headers to all responses.
+ * =================================================================
  */
 
+// Helper function to add CORS headers to a response
+function addCorsHeaders(response) {
+  response.headers.set('Access-Control-Allow-Origin', '*'); // Allow any origin to access
+  response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS'); // Allow these HTTP methods
+  response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization'); // Allow these headers
+  return response;
+}
+
 export default {
-	async fetch(request, env) {
-		const url = new URL(request.url);
+  async fetch(request, env) {
+    // --- CORS Preflight Request Handling ---
+    // The browser sends an OPTIONS request first to check if the server will allow
+    // a request from a different origin. We handle that here.
+    if (request.method === 'OPTIONS') {
+      return addCorsHeaders(new Response(null, { status: 204 })); // 204 No Content
+    }
 
-		// Basic routing
-		if (url.pathname !== '/v1/reason' || request.method !== 'POST') {
-			return new Response('Not Found. Please POST to /v1/reason', { status: 404 });
-		}
+    const url = new URL(request.url);
 
-		try {
-			const body = await request.json();
+    // Basic routing for our API endpoint
+    if (url.pathname !== '/v1/reason' || request.method !== 'POST') {
+      const notFoundResponse = new Response('Not Found. Please POST to /v1/reason', { status: 404 });
+      return addCorsHeaders(notFoundResponse); // Add CORS headers even to error responses
+    }
 
-			// --- Input Validation ---
-			if (!body.query || !body.model) {
-				return new Response(JSON.stringify({
-					status: 'error',
-					message: 'Missing required fields: `query` and `model` are required.'
-				}), {
-					status: 400,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
+    try {
+      const body = await request.json();
 
-			// --- Initialization ---
-			const reasoning_trace = [];
-			const usage = {
-				backend_model: body.model,
-				total_prompt_tokens: 0,
-				total_completion_tokens: 0,
-				api_calls: 0,
-			};
+      // --- Input Validation ---
+      if (!body.query || !body.model) {
+        const badRequestResponse = new Response(JSON.stringify({
+          status: 'error',
+          message: 'Missing required fields: `query` and `model` are required.'
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+        return addCorsHeaders(badRequestResponse);
+      }
 
-			const strategy = body.strategy || 'auto';
-			let final_answer = '';
+      // --- Initialization ---
+      const reasoning_trace = [];
+      const usage = {
+        backend_model: body.model,
+        total_prompt_tokens: 0,
+        total_completion_tokens: 0,
+        api_calls: 0,
+      };
 
-			// --- Strategy Selection ---
-			let chosen_strategy = strategy;
-			if (strategy === 'auto') {
-				// Simple logic for auto-selection. This could be a meta-LLM call in a more advanced version.
-				if (body.query.toLowerCase().includes('plan') || body.query.toLowerCase().includes('steps')) {
-					chosen_strategy = 'decompose';
-				} else {
-					chosen_strategy = 'chain_of_thought';
-				}
-			}
-			
-			reasoning_trace.push({ step: 1, type: 'strategy_selection', content: `Strategy '${strategy}' selected. Executing as '${chosen_strategy}'.` });
+      const strategy = body.strategy || 'auto';
+      let final_answer = '';
 
-			// --- Execute Strategy ---
-			switch (chosen_strategy) {
-				case 'decompose':
-					final_answer = await runDecompositionStrategy(body, env, reasoning_trace, usage);
-					break;
-				case 'self_correct':
-					final_answer = await runSelfCorrectionStrategy(body, env, reasoning_trace, usage);
-					break;
-				case 'chain_of_thought':
-				default:
-					final_answer = await runChainOfThoughtStrategy(body, env, reasoning_trace, usage);
-					break;
-			}
-			
-			// --- Final Response ---
-			const responsePayload = {
-				status: 'success',
-				final_answer,
-				reasoning_trace,
-				usage,
-			};
+      // --- Strategy Selection ---
+      let chosen_strategy = strategy;
+      if (strategy === 'auto') {
+        if (body.query.toLowerCase().includes('plan') || body.query.toLowerCase().includes('steps')) {
+          chosen_strategy = 'decompose';
+        } else {
+          chosen_strategy = 'chain_of_thought';
+        }
+      }
+      reasoning_trace.push({ step: 1, type: 'strategy_selection', content: `Strategy '${strategy}' selected. Executing as '${chosen_strategy}'.` });
 
-			return new Response(JSON.stringify(responsePayload, null, 2), {
-				headers: { 'Content-Type': 'application/json' },
-			});
+      // --- Execute Strategy ---
+      switch (chosen_strategy) {
+        case 'decompose':
+          final_answer = await runDecompositionStrategy(body, env, reasoning_trace, usage);
+          break;
+        case 'self_correct':
+          final_answer = await runSelfCorrectionStrategy(body, env, reasoning_trace, usage);
+          break;
+        case 'chain_of_thought':
+        default:
+          final_answer = await runChainOfThoughtStrategy(body, env, reasoning_trace, usage);
+          break;
+      }
+      
+      // --- Final Response ---
+      const responsePayload = {
+        status: 'success',
+        final_answer,
+        reasoning_trace,
+        usage,
+      };
 
-		} catch (error) {
-			console.error('Error in worker:', error);
-			return new Response(JSON.stringify({ status: 'error', message: error.message }), {
-				status: 500,
-				headers: { 'Content-Type': 'application/json' }
-			});
-		}
-	},
+      const successResponse = new Response(JSON.stringify(responsePayload, null, 2), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      // Add CORS headers to the final successful response
+      return addCorsHeaders(successResponse);
+
+    } catch (error) {
+      console.error('Error in worker:', error);
+      const errorResponse = new Response(JSON.stringify({ status: 'error', message: error.message }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+      // Add CORS headers to the server error response
+      return addCorsHeaders(errorResponse);
+    }
+  },
 };
 
 /**
@@ -95,7 +120,6 @@ async function callPollinationsAPI(messages, model, env, usage) {
 	const headers = {
 		'Content-Type': 'application/json',
 	};
-	// Use the secret token if it exists
 	if (env.POLLINATIONS_TOKEN) {
 		headers['Authorization'] = `Bearer ${env.POLLINATIONS_TOKEN}`;
 	}
@@ -116,8 +140,6 @@ async function callPollinationsAPI(messages, model, env, usage) {
 
 	const data = await response.json();
 	usage.api_calls++;
-
-	// Update token usage if the API provides it
 	if (data.usage) {
 		usage.total_prompt_tokens += data.usage.prompt_tokens || 0;
 		usage.total_completion_tokens += data.usage.completion_tokens || 0;
@@ -143,10 +165,7 @@ async function runChainOfThoughtStrategy(body, env, reasoning_trace, usage) {
 	];
 
 	const response = await callPollinationsAPI(messages, model, env, usage);
-	
 	reasoning_trace.push({ step: step + 1, type: 'llm_response', content: response });
-
-	// For CoT, the final response *is* the LLM's full thought process and answer.
 	return response;
 }
 
