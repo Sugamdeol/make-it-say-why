@@ -1,4 +1,4 @@
-name = "cognitive-orchestrator"
+name = "reason-llm"
 main = "src/worker.js"
 compatibility_date = "2024-03-18"
 
